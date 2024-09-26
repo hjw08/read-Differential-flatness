@@ -70,7 +70,7 @@ namespace plan_manage
 
     Eigen::Vector4d start_state;
     Eigen::Vector2d init_ctrl;
-
+    //车辆当前状态信息
     start_state << head_state_.vec_position, head_state_.angle, head_state_.velocity;    
     init_ctrl << head_state_.steer, head_state_.acceleration;
     //steer and acc
@@ -82,7 +82,11 @@ namespace plan_manage
     // start_state << -26.3909,  20.7379  ,1.57702 ,       0;      end_state << -45.4141,   10.3171 ,0.0600779     , 0.01;
     std::cout<<"start state: "<<start_state.transpose()<<" end_state: "<<end_state.transpose()<<std::endl;
     std::cout<<"init ctrl: "<<init_ctrl.transpose()<<std::endl;
+    //search是混合A星搜索的主要函数 实现在kino_astar.cpp
+    //得到一条std::vector<PathNodePtr> path_nodes_; 其中 typedef PathNode* PathNodePtr; 是混合A星节点的类型
+    //这里不同于Apollo，都是全局坐标系下的混合A星，平坦输出也是
     int status = kino_path_finder_->search(start_state, init_ctrl, end_state, true);
+
     double searcht2 = ros::Time::now().toSec();
     if (status == path_searching::KinoAstar::NO_PATH)
     {
@@ -105,7 +109,8 @@ namespace plan_manage
     {
       std::cout << "[kino replan]: kinodynamic search success." << std::endl;
     }
-
+    //混合A星得到前端路径  getKinoNode把路径存入kino_trajs_中去。这里的kino_trajs_是一个
+    //plan_utils::KinoTrajData，是一个FlatTrajData组成的Vector。就是论文里的segments的集合
     kino_path_finder_->getKinoNode(kino_trajs_);
     
     // ROS_WARN("hzc debug kinodynamic search");
@@ -200,7 +205,8 @@ namespace plan_manage
     }
 
     double frontendt1 = ros::Time::now().toSec();
-    if (getKinoPath(parking_end) != kSuccess){
+    //getKinoPath的作用是调用混合A星search跟生成优化前的最终路径(通过getKinoNode)
+    if (getKinoPath(parking_end) != kSuccess){  
       LOG(ERROR) << "[PolyTrajManager Parking] fail to get the front-end.\n";
       return kWrongStatus;   
     }
@@ -210,6 +216,7 @@ namespace plan_manage
     // tri_flag =1;
     std::cout<<"traj segs num: "<<kino_trajs_.size()<<"\n";
     
+    //核心函数，调用minco优化器。
     if (RunMINCOParking()!= kSuccess)
     {
       LOG(ERROR) << "[PolyTrajManager Parking] fail to optimize the trajectories.\n";
@@ -511,6 +518,7 @@ namespace plan_manage
     
     
     traj_container_.clearSingul();
+    // MatrixXd表示一个具有动态大小的矩阵
     Eigen::MatrixXd flat_finalState(2, 3),  flat_headState(2,3);
     Eigen::VectorXd ego_piece_dur_vec;
     Eigen::MatrixXd ego_innerPs;
@@ -518,6 +526,7 @@ namespace plan_manage
     nav_msgs::Path debug_msg0,debug_msg1;
     display_hPolys_.clear();
     double worldtime =  head_state_.time_stamp;
+    //basetime是记录从第一个segment开始，到目前这个segment的时间
     double basetime = 0.0;
 
     /*try to merge optimization process*/
@@ -527,8 +536,9 @@ namespace plan_manage
     std::vector<Eigen::MatrixXd> waypoints_container;
     std::vector<Eigen::MatrixXd> iniState_container,finState_container;
     duration_container.resize(kino_trajs_.size());
-
+    // 遍历kino_trajs_的每一个kino_traj(就是一个segment)
     for(unsigned int i = 0; i < kino_trajs_.size(); i++){
+      //每个piece的时间
       double timePerPiece = traj_piece_duration_;
       plan_utils::FlatTrajData kino_traj = kino_trajs_.at(i);
       singul_container.push_back(kino_traj.singul);
@@ -537,18 +547,26 @@ namespace plan_manage
       plan_utils::Trajectory initTraj;
       int piece_nums;
       double initTotalduration = 0.0;
+      //这些点的第三维度是时间，遍历过程中把时间求和，把整个Segment的总时间求了出来
       for(const auto pt : pts){
         initTotalduration += pt[2];
       }
+      //随后重新计算了每个Piece的持续时间和Piece数目，然后
+      //更新ego_piece_dur_vec为一个Piece数目维度的向量并存入每一段的时间
       piece_nums = std::max(int(initTotalduration / timePerPiece + 0.5),2);
       timePerPiece = initTotalduration / piece_nums; 
       ego_piece_dur_vec.resize(piece_nums);
       ego_piece_dur_vec.setConstant(timePerPiece);
+      //duration_container作为一个Segment数目维度的向量，记录下每个Segment的时间
       duration_container[i] = timePerPiece * piece_nums;
+      //每段segment中间点的数量(即不包括首尾两个点)
       ego_innerPs.resize(2, piece_nums-1);
+      //statelist放的是每个segment的点
       std::vector<Eigen::Vector3d> statelist;
+      //res_time是这个segment中，从第一个piece到当前piece的时间
       double res_time = 0;
       for(int i = 0; i < piece_nums; i++ ){
+        //这个resolution就是论文中的lamda段（见公式(8)-(9)之间），也就是每一个piece中点的数量
         int resolution;
         if(i==0||i==piece_nums-1){
           resolution = dense_traj_res;
@@ -557,9 +575,12 @@ namespace plan_manage
           resolution = traj_res;
         }
         for(int k = 0; k <= resolution; k++){
+          //绝对时间=basetime + res_time + 当前这个piece第k份的时间
           double t = basetime+res_time + 1.0*k/resolution*ego_piece_dur_vec[i];
+          //再用evaluatePos函数算位置，所以自然每个Piece的端点信息也都会重新计算
           Eigen::Vector3d pos = kino_path_finder_->evaluatePos(t);
           statelist.push_back(pos);
+          //每个piece的端点也要重新计算
           if(k==resolution && i!=piece_nums-1){
             ego_innerPs.col(i) = pos.head(2); 
           }
@@ -568,15 +589,18 @@ namespace plan_manage
       }
       std::cout<<"s: "<<kino_traj.singul<<"\n";
       double tm1 = ros::Time::now().toSec();
+      //为给定的状态列表生成一个矩形走廊（corridor），并检查这些矩形是否与障碍物发生碰撞。矩形都存进hPolys_
       getRectangleConst(statelist);
       sfc_container.push_back(hPolys_);
       display_hPolys_.insert(display_hPolys_.end(),hPolys_.begin(),hPolys_.end());
+      //那waypoints_container放的就是非每段segment首尾的点
       waypoints_container.push_back(ego_innerPs);
       iniState_container.push_back(kino_traj.start_state);
       finState_container.push_back(kino_traj.final_state);
       basetime += initTotalduration;
       //visualization
       initMJO.reset(ego_piece_dur_vec.size());
+      //得到每一个segment的多项式轨迹系数c矩阵
       initMJO.generate(ego_innerPs, timePerPiece,kino_traj.start_state, kino_traj.final_state);
       initTraj = initMJO.getTraj(kino_traj.singul);
       {
@@ -604,7 +628,7 @@ namespace plan_manage
     ploy_traj_opt_->setSurroundTrajs(&surround_trajs);
     // ploy_traj_opt_->setSurroundTrajs(NULL);
     std::cout<<"try to optimize!\n";
-    
+    //轨迹处理完成，进入优化部分，实现在traj_optimizer.cpp
     int flag_success = ploy_traj_opt_->OptimizeTrajectory(iniState_container, finState_container, 
                                                         waypoints_container,duration_container, 
                                                         sfc_container,  singul_container,worldtime,0.0);
@@ -1210,6 +1234,8 @@ namespace plan_manage
     }
     return kSuccess;
   }
+  
+  //为给定的状态列表生成一个矩形走廊（corridor），并检查这些矩形是否与障碍物发生碰撞
   ErrorType TrajPlanner::getRectangleConst(std::vector<Eigen::Vector3d> statelist){
     hPolys_.clear();
     GridMap2D grid_map;

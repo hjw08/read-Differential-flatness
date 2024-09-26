@@ -131,6 +131,7 @@ using namespace std;
   private:
     /* ---------- main data structure ---------- */
     vector<PathNodePtr> path_node_pool_;
+    //拓展节点数量、迭代次数
     int use_node_num_, iter_num_;
     NodeHashTable<PathNodePtr> expanded_nodes_;
     std::priority_queue<PathNodePtr, std::vector<PathNodePtr>, NodeComparator> open_set_;
@@ -217,7 +218,7 @@ using namespace std;
       
       return singul;
     }
-    // getHeu
+    // getHeu 简单的欧氏距离
     inline double getHeu(Eigen::VectorXd x1, Eigen::VectorXd x2)
     {
       double dx = abs(x1(0) - x2(0));

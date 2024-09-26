@@ -18,7 +18,7 @@ namespace plan_utils
   struct FlatTrajData
   {
     int singul;
-    std::vector<Eigen::Vector3d> traj_pts;      // 3, N  x,y dur
+    std::vector<Eigen::Vector3d> traj_pts;      // 3, N  x,y dur(即每一小段的持续时间)
     std::vector<double> thetas;
     Eigen::MatrixXd start_state;   // start flat state (2, 3)
     Eigen::MatrixXd final_state;   // end flat state (2, 3)

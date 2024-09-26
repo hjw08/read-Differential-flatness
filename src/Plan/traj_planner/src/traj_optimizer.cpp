@@ -19,10 +19,11 @@ namespace plan_manage
     variable_num_ = 0;
     jerkOpt_container.clear();
     piece_num_container.clear();
+    //分别存储每个轨迹的优化器和段数
     jerkOpt_container.resize(trajnum);
     piece_num_container.resize(trajnum);
     double final_cost;
-
+    //Ts论文里是每一个segment时间之和，即总时间
     if(initTs.size()!=trajnum){
       ROS_ERROR("initTs.size()!=trajnum");
       return false;
@@ -32,7 +33,7 @@ namespace plan_manage
       return false;
     }
     std::cout <<"initTs: "<<initTs.transpose()<<std::endl;
-
+    //初始化每个轨迹的优化器
     for(int i = 0; i < trajnum; i++){
       //check
       if(initInnerPts[i].cols()==0){
@@ -46,6 +47,7 @@ namespace plan_manage
         ROS_ERROR("cfgHs size error!");
         return false;
       }
+      //归一化障碍物多边形的法向量
       for (int k = 0; k < (piece_num_ - 2) * (traj_resolution_ + 1) + 2 * (destraj_resolution_ + 1); k++)
       {
         cfgHs_container[i][k].topRows<2>().colwise().normalize(); // norm vector outside

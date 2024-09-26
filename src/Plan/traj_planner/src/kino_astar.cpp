@@ -34,6 +34,7 @@ namespace path_searching
       state1[2] = state0[2]; 
     }
   }
+  //起始点x, y, phi, v  初始控制量steer, a  
   int KinoAstar::search(Eigen::Vector4d start_state, Eigen::Vector2d init_ctrl,
                                Eigen::Vector4d end_state,bool use3d)
   {
@@ -63,11 +64,13 @@ namespace path_searching
     cur_node->yaw_idx = yawToIndex(start_state[2]);
     cur_node->g_score = 0.0;
     cur_node->input = Eigen::Vector2d(0.0,0.0);
-    cur_node->singul = getSingularity(start_state(3));
+    //1为前进，-1为后退
+    cur_node->singul = getSingularity(start_state(3));  
     cur_node->f_score = lambda_heu_ * getHeu(cur_node->state, end_state);
     cur_node->node_state = IN_OPEN_SET;
     open_set_.push(cur_node);
     use_node_num_ += 1;
+    //3d就是混合A星拓展
     if(!use3d)
       expanded_nodes_.insert(cur_node->index, cur_node);
     else
@@ -85,10 +88,11 @@ namespace path_searching
 
       /* ---------- determine termination ---------- */
       // to decide the near end
+      //eigen的vector.head(n)取向量前n个元素
       bool reach_horizon = (cur_node->state.head(2) - start_state_.head(2)).norm() >= horizon_;
       double t1 = ros::Time::now().toSec();
       if((cur_node->state.head(2) - end_state_.head(2)).norm()<15.0&& initsearch){
-    
+        //是否命中（RS曲线？懒得看了）
         is_shot_sucess(cur_node->state,end_state_.head(3));
       }
       double t2 = ros::Time::now().toSec();
@@ -119,7 +123,6 @@ namespace path_searching
         has_path_ = true;
         if (terminate_node->parent == NULL)
         {
-
           cout << "[34mKino Astar]: terminate_node->parent == NULL" << endl;
           printf("\033[Kino Astar]: NO_PATH \n\033[0m");
           return NO_PATH;
@@ -141,7 +144,8 @@ namespace path_searching
       vector<Eigen::Vector2d> inputs;
       double res = 0.5;
       if(!initsearch ){
-        if(start_state_[3]>0){
+        //前进
+        if(start_state_[3]>0){  
           for(double arc = resolution_; arc <= 2*resolution_ + 1e-3; arc += resolution_){
             for(double steer = -max_steer_; steer <= max_steer_ + 1e-3; steer += res * max_steer_* 1.0){
               ctrl_input<< steer, arc;
@@ -149,6 +153,7 @@ namespace path_searching
             }
           }
         }
+        //后退
         else{
           for(double arc = -resolution_; arc >= -2*resolution_ - 1e-3; arc-= resolution_){
             for(double steer = -max_steer_; steer <= max_steer_ + 1e-3; steer += res * max_steer_* 1.0){
@@ -465,7 +470,9 @@ namespace path_searching
     return SampleTraj;
   }
   /*hzchzc px py yaw*/
+  //在给定时间 t 的情况下，评估运动轨迹上的一个位置。通过插值计算出在时间 t 时的位置、速度和方向。
   Eigen::Vector3d KinoAstar::evaluatePos(double t){
+    //确保时间 t 在 [0, totalTrajTime] 范围内
     t = std::min<double>(std::max<double>(0,t),totalTrajTime);
     double startvel = fabs(start_state_[3]);
     double endvel = fabs(end_state_[3]);
@@ -473,29 +480,36 @@ namespace path_searching
     double tmpT = 0;
     double CutTime;
     //locate the local traj
+    //通过累加 shot_timeList 中的时间，找到包含时间 t 的局部轨迹段，并计算出在该段中的相对时间 CutTime
     for(int i = 0;i<shot_timeList.size();i++){
       tmpT+=shot_timeList[i];
       if(tmpT>=t) {
         index = i; 
         CutTime = t-tmpT+shot_timeList[i];
         break;
-        }
+      }
     }
-
+    // 局部轨迹段的初始和最终速度
     double initv = non_siguav,finv = non_siguav;
+    // 如果局部轨迹段是第一个段，则初始速度为起点速度；如果是最后一个段，则最终速度为终点速度
     if(index==0) {initv  = startvel;}
     if(index==shot_lengthList.size() - 1) finv = endvel;
 
+    //感觉变量命名为currenttime这种好些
     double localtime = shot_timeList[index];
     double locallength = shot_lengthList[index];
-    int front = shotindex[index]; int back =  shotindex[index+1];
-    std::vector<Eigen::Vector3d> localTraj;localTraj.assign(SampleTraj.begin()+front,SampleTraj.begin()+back+1);
+    int front = shotindex[index]; 
+    int back =  shotindex[index+1];
+    std::vector<Eigen::Vector3d> localTraj;
+    localTraj.assign(SampleTraj.begin()+front,SampleTraj.begin()+back+1);
     //find the nearest point
     double arclength;
+    //使用 evaluateLength 函数计算在 CutTime 时的弧长 arclength（正向或者反向）
     if(shot_SList[index] > 0)
       arclength= evaluateLength(CutTime,locallength,localtime,max_forward_vel,max_forward_acc, initv,finv);
     else
       arclength= evaluateLength(CutTime,locallength,localtime,max_backward_vel, max_backward_acc, initv,finv);
+    //通过累加局部轨迹段上相邻点的距离，找到与 arclength 对应的点
     double tmparc = 0;
     for(int i = 0; i < localTraj.size()-1;i++){
       tmparc += (localTraj[i+1]-localTraj[i]).head(2).norm();
@@ -519,6 +533,7 @@ namespace path_searching
     }
     return localTraj.back();
   }
+
   std::vector<Eigen::Vector4d> KinoAstar::SamplePosList(int N){
       double dt = totalTrajTime/N;
       std::vector<Eigen::Vector4d>  path;
@@ -557,9 +572,10 @@ namespace path_searching
     bool exceed_len = false;
 
     flat_trajs.clear();
-    std::vector<Eigen::Vector3d> roughSampleList;
+    std::vector<Eigen::Vector3d> roughSampleList;    //x y theta
     double startvel = fabs(start_state_[3]);
     double endvel = fabs(end_state_[3]);
+    //取到初始路径的终点
     PathNodePtr node = path_nodes_.back();
     std::vector<Eigen::Vector3d> traj_pts;  // 3, N
     std::vector<double> thetas;
@@ -570,7 +586,8 @@ namespace path_searching
       {
         Eigen::Vector3d state;
         double tmparc = node->input[1] * double(k) / double(check_num_);
-        Eigen::Vector2d tmpctrl; tmpctrl << node->input[0],tmparc;
+        Eigen::Vector2d tmpctrl; 
+        tmpctrl << node->input[0],tmparc;
         stateTransit(node->parent->state, state, tmpctrl);
         state[2] = normalize_angle(state[2]);
         roughSampleList.push_back(state);
@@ -580,8 +597,10 @@ namespace path_searching
     } 
     start_state_[2] = normalize_angle(start_state_[2]);
     roughSampleList.push_back(start_state_.head(3));
+    //得到混合A星规划的路径结果x y theta(rad)
     reverse(roughSampleList.begin(),roughSampleList.end());
 
+    //若RS曲线击中，则把两段路径结合
     if(is_shot_succ_){
       ompl::base::ScopedState<> from(shotptr), to(shotptr), s(shotptr);
       Eigen::Vector3d state1,state2;
@@ -608,7 +627,8 @@ namespace path_searching
       //   break;
       // }
     }
-    roughSampleList.assign(roughSampleList.begin(),roughSampleList.begin()+truncate_idx+1);
+    //根据截断长度取粗路径长度
+    roughSampleList.assign(roughSampleList.begin(),roughSampleList.begin()+truncate_idx+1);   
     SampleTraj = roughSampleList;
     /*divide the whole shot traj into different segments*/   
     shot_lengthList.clear();
@@ -632,6 +652,7 @@ namespace path_searching
         shot_SList.push_back(lastS);
         shot_lengthList.push_back(tmpl);
         if(lastS>0)
+          //evaluateDuration计算一段路径(tmpl, 这里也就是相邻两点之间)花费的时间
           shot_timeList.push_back(evaluateDuration(tmpl,max_forward_vel, max_forward_acc, non_siguav,non_siguav));
         else
           shot_timeList.push_back(evaluateDuration(tmpl,max_backward_vel, max_backward_acc, non_siguav,non_siguav));
@@ -674,7 +695,8 @@ namespace path_searching
 
       double locallength = shot_lengthList[i];
       int sig = shot_SList[i];
-      std::vector<Eigen::Vector3d> localTraj;localTraj.assign(SampleTraj.begin()+shotindex[i],SampleTraj.begin()+shotindex[i+1]+1);
+      std::vector<Eigen::Vector3d> localTraj;
+      localTraj.assign(SampleTraj.begin()+shotindex[i],SampleTraj.begin()+shotindex[i+1]+1);
       traj_pts.clear();
       thetas.clear();        
       double samplet;
@@ -722,11 +744,13 @@ namespace path_searching
           }
         }      
       }
+      //将当前轨迹段的最后一个轨迹点和方向角添加到 traj_pts 和 thetas 中
       traj_pts.push_back(Eigen::Vector3d(localTraj.back()[0],localTraj.back()[1],shot_timeList[i]-(samplet-sampletime)));
       thetas.push_back(localTraj.back()[2]);
       plan_utils::FlatTrajData flat_traj;
       Eigen::MatrixXd startS;
       Eigen::MatrixXd endS;
+      //调用 getFlatState 函数计算当前轨迹段的起始状态 startS 和结束状态 endS，平坦输入只有每一段的起始点和终点？segment
       getFlatState(Eigen::Vector4d(localTraj.front()[0],localTraj.front()[1],localTraj.front()[2],initv),Initctrlinput,startS,sig);
       getFlatState(Eigen::Vector4d(localTraj.back()[0],localTraj.back()[1],localTraj.back()[2],finv),Finctrlinput,endS,sig);
       flat_traj.traj_pts = traj_pts;
@@ -757,8 +781,6 @@ namespace path_searching
       double tmpv = sqrt(0.5*(startv2+endv2+2*max_acc*length));
       return (tmpv-startV)/max_acc + (tmpv-endV)/max_acc;
     }
-
-
   }
   double KinoAstar::evaluateLength(double curt,double locallength,double localtime,double max_vel, double max_acc, double startV, double endV){
     double critical_len; //the critical length of two-order optimal control, acc is the input
@@ -800,7 +822,7 @@ namespace path_searching
     visited.assign(path_node_pool_.begin(), path_node_pool_.begin() + use_node_num_ - 1);
     return visited;
   }
-
+  //离散图中的index
   Eigen::Vector2i KinoAstar::posToIndex(Eigen::Vector2d pt)
   {
     int idx = std::round((pt[0]-origin_[0])/resolution_);
@@ -830,7 +852,7 @@ namespace path_searching
 
   }
 
-
+  //平坦输入都是全局坐标系的
   void KinoAstar::getFlatState(Eigen::Vector4d state, Eigen::Vector2d control_input,
                                   Eigen::MatrixXd &flat_state, int singul)
   {
